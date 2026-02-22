@@ -1,0 +1,1 @@
+"""API health endpoints (placeholder)."""

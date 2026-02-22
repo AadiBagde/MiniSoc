@@ -1,2 +1,1 @@
-# AegisSOC
-End-to-End Attack Detection, Correlation &amp; Automated Response Platform
+# AegisSOC — Mini-SOC project (placeholder)
