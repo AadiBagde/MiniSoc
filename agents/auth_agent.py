@@ -1,11 +1,18 @@
-"""Auth agent: collect and forward SSH/sudo/auth logs (placeholder)."""
+"""
+Auth Agent
+Collects Linux auth logs → normalizes → detects → correlates → generates alerts/incidents
+"""
 
-import os 
-import time 
+import os
+import time
 import json
 import hashlib
 from datetime import datetime
-from typing import List, Dict, Generator
+from typing import Generator, Dict
+
+from parser.log_parser import parse_auth_log
+from detection.rules_engine import process_event
+from correlation.incident_builder import correlate_event
 
 
 # =========================
@@ -13,74 +20,58 @@ from typing import List, Dict, Generator
 # =========================
 
 CONFIG = {
-    "log_file" : "/var/log/auth.log",
-    "poll_interval" : 1,
-    "agent_name" : "auth_agent",
-    "host" : os.uname().nodename
+    "log_file": "/var/log/auth.log",   # Change to /var/log/secure if needed
+    "poll_interval": 1,
+    "agent_name": "auth_agent",
+    "host": os.uname().nodename
 }
+
 
 # =========================
 # UTILS
 # =========================
 
 def file_hash(line: str) -> str:
-    """Generate a hash for a log line."""
     return hashlib.sha256(line.encode()).hexdigest()
 
-def current_timestamp() -> str: 
-    """Get the current timestamp in ISO format."""
+
+def current_timestamp() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
+
 # =========================
-# FILE FOLLOWER 
+# FILE FOLLOWER (tail -f style)
 # =========================
 
 def follow_log(file_path: str) -> Generator[str, None, None]:
-    """
-    Follow a log file like tail -f
-    Handles log rotation safely
-    """
+
     with open(file_path, "r") as f:
         f.seek(0, os.SEEK_END)
         inode = os.fstat(f.fileno()).st_ino
 
         while True:
             line = f.readline()
+
             if line:
                 yield line
             else:
                 time.sleep(CONFIG["poll_interval"])
+
                 try:
                     if os.stat(file_path).st_ino != inode:
-                        # Log rotated
                         f.close()
                         f = open(file_path, "r")
                         inode = os.fstat(f.fileno()).st_ino
                 except FileNotFoundError:
                     time.sleep(1)
 
-# =========================
-# EVENT BUILDER
-# =========================
-
-def build_event(raw_line: str) -> Dict:
-    """
-    Convert raw log line to structured security event
-    """
-    return {
-        "agent": CONFIG["agent_name"],
-        "host": CONFIG["host"],
-        "event_source": "linux_auth",
-        "raw_log": raw_line.strip(),
-        "timestamp": current_timestamp(),
-        "hash": file_hash(raw_line)
-    }
 
 # =========================
 # MAIN AGENT LOOP
 # =========================
 
 def run_agent():
+
     if not os.path.exists(CONFIG["log_file"]):
         raise FileNotFoundError(f"Log file not found: {CONFIG['log_file']}")
 
@@ -88,9 +79,48 @@ def run_agent():
     print(f"[+] Monitoring {CONFIG['log_file']}")
 
     for line in follow_log(CONFIG["log_file"]):
-        if "sshd" in line or "sudo" in line:
-            event = build_event(line)
-            print(json.dumps(event, indent=2))
+
+        # Filter noise early
+        if "sshd" not in line and "sudo" not in line:
+            continue
+
+        # -------------------------
+        # Step 1: Normalize
+        # -------------------------
+        normalized_event = parse_auth_log(line)
+        if not normalized_event:
+            continue
+
+        # -------------------------
+        # Step 2: Detection
+        # -------------------------
+        alert = process_event(normalized_event)
+
+        # -------------------------
+        # Step 3: Correlation
+        # -------------------------
+        incident = correlate_event(normalized_event)
+
+        # -------------------------
+        # Step 4: Print Event
+        # -------------------------
+        print("\n📦 EVENT")
+        print(json.dumps(normalized_event, indent=2))
+
+        # -------------------------
+        # Step 5: Print Alert
+        # -------------------------
+        if alert:
+            print("\n🚨 ALERT GENERATED 🚨")
+            print(json.dumps(alert, indent=2))
+
+        # -------------------------
+        # Step 6: Print Incident
+        # -------------------------
+        if incident:
+            print("\n🔥 INCIDENT CREATED 🔥")
+            print(json.dumps(incident, indent=2))
+
 
 # =========================
 # ENTRY POINT
